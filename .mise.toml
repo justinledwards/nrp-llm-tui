@@ -1,0 +1,44 @@
+[tools]
+python = "3.12"
+
+[tasks.setup]
+description = "Create uv venv and install deps"
+env = { XDG_CACHE_HOME = ".cache", UV_CACHE_DIR = ".cache/uv" }
+dir = "{{config_root}}"
+run = """
+uv venv .venv
+uv pip install -r requirements.txt
+"""
+
+[tasks.run]
+description = "Run TUI"
+env = { VIRTUAL_ENV = "{{config_root}}/.venv", PATH = "{{env.VIRTUAL_ENV}}/bin:{{env.PATH}}" }
+dir = "{{config_root}}"
+run = """
+set -a
+[ -f "{{config_root}}/.env" ] && . "{{config_root}}/.env"
+set +a
+{{env.VIRTUAL_ENV}}/bin/python -m nrp_tui
+"""
+
+[tasks.models]
+description = "List models via CLI"
+env = { VIRTUAL_ENV = "{{config_root}}/.venv", PATH = "{{env.VIRTUAL_ENV}}/bin:{{env.PATH}}" }
+dir = "{{config_root}}"
+run = """
+set -a
+[ -f "{{config_root}}/.env" ] && . "{{config_root}}/.env"
+set +a
+{{env.VIRTUAL_ENV}}/bin/python -m nrp_tui list-models
+"""
+
+[tasks.chat]
+description = "Chat with a selected model via CLI"
+env = { VIRTUAL_ENV = "{{config_root}}/.venv", PATH = "{{env.VIRTUAL_ENV}}/bin:{{env.PATH}}" }
+dir = "{{config_root}}"
+run = """
+set -a
+[ -f "{{config_root}}/.env" ] && . "{{config_root}}/.env"
+set +a
+{{env.VIRTUAL_ENV}}/bin/python -m nrp_tui chat --model gemma3
+"""
