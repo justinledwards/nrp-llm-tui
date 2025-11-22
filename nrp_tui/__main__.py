@@ -49,6 +49,7 @@ def run_chat_cli(model: str) -> None:
             break
 
         try:
+            print(f"{model} (thinking...)")
             reply = agent.send(user_input)
         except Exception as exc:
             print(f"[error] Chat request failed: {exc}")

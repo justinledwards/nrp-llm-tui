@@ -16,6 +16,7 @@ class ModelTableApp(App):
 
     loading: reactive[bool] = reactive(True)
     selected_model: reactive[Optional[str]] = reactive(None)
+    chat_pending: reactive[bool] = reactive(False)
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -40,8 +41,6 @@ class ModelTableApp(App):
                 Log(
                     id="chat_log",
                     highlight=False,
-                    markup=False,
-                    wrap=True,
                     max_lines=500,
                 ),
                 Input(placeholder="Type a message and press Enter", id="chat_input"),
@@ -63,7 +62,7 @@ class ModelTableApp(App):
         )
 
         self.load_models()
-        self.chat_log = self.query_one("#chat_log", TextLog)
+        self.chat_log = self.query_one("#chat_log", Log)
         self.chat_hint = self.query_one("#chat_hint", Static)
         self.chat_input = self.query_one("#chat_input", Input)
         self.set_focus(table)
@@ -123,6 +122,10 @@ class ModelTableApp(App):
 
         if self.chat_log:
             self.chat_log.write(f"You: {text}")
+            self.chat_log.write("[system] Waiting for response...")
+        if self.chat_input:
+            self.chat_input.disabled = True
+            self.chat_pending = True
 
         try:
             reply = await asyncio.to_thread(self.agent.send, text)
@@ -132,9 +135,13 @@ class ModelTableApp(App):
             return
 
         if self.chat_log:
+            if self.chat_pending:
+                self.chat_log.write("[system] Response received.")
             self.chat_log.write(f"{self.selected_model}: {reply}")
         if self.chat_input:
+            self.chat_input.disabled = False
             self.set_focus(self.chat_input)
+        self.chat_pending = False
 
 
 def run_tui() -> None:
