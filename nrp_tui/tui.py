@@ -1,4 +1,6 @@
 import asyncio
+import logging
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from textual import on
@@ -9,6 +11,17 @@ from textual.reactive import reactive
 
 from .client import NRPClient
 from .agent_stub import UserResponseAgent
+
+LOG_DIR = Path(__file__).resolve().parent.parent / "logs"
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+_logger = logging.getLogger("nrp_tui")
+if not _logger.handlers:
+    _logger.setLevel(logging.INFO)
+    handler = logging.FileHandler(LOG_DIR / "tui.log")
+    handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+    )
+    _logger.addHandler(handler)
 
 
 class ModelTableApp(App):
@@ -96,12 +109,14 @@ class ModelTableApp(App):
 
     @on(DataTable.RowSelected)
     def handle_row_selected(self, event: DataTable.RowSelected) -> None:
-        model_id = str(event.row_key)
+        row_key = event.row_key
+        model_id = row_key.value if hasattr(row_key, "value") else row_key
+        model_id = str(model_id)
         self.selected_model = model_id
         self.agent = UserResponseAgent(model=model_id)
         if self.chat_log:
             self.chat_log.clear()
-            self.chat_log.write(f"[system] Now chatting with {model_id}")
+            self.chat_log.write(f"[system] Now chatting with {model_id}\n")
         if self.chat_hint:
             self.chat_hint.update(f"Chatting with {model_id}.")
         if self.chat_input:
@@ -117,12 +132,12 @@ class ModelTableApp(App):
             return
         if not self.agent or not self.selected_model:
             if self.chat_log:
-                self.chat_log.write("[warn] Select a model first.")
+                self.chat_log.write("[warn] Select a model first.\n")
             return
 
         if self.chat_log:
-            self.chat_log.write(f"You: {text}")
-            self.chat_log.write("[system] Waiting for response...")
+            self.chat_log.write(f"You: {text}\n")
+            self.chat_log.write("[system] Waiting for response...\n")
         if self.chat_input:
             self.chat_input.disabled = True
             self.chat_pending = True
@@ -130,14 +145,15 @@ class ModelTableApp(App):
         try:
             reply = await asyncio.to_thread(self.agent.send, text)
         except Exception as exc:  # pragma: no cover - runtime safety
+            _logger.exception("Chat request failed for model %s", self.selected_model)
             if self.chat_log:
-                self.chat_log.write(f"[error] Chat request failed: {exc}")
+                self.chat_log.write(f"[error] Chat request failed: {exc}\n")
             return
 
         if self.chat_log:
             if self.chat_pending:
-                self.chat_log.write("[system] Response received.")
-            self.chat_log.write(f"{self.selected_model}: {reply}")
+                self.chat_log.write("[system] Response received.\n")
+            self.chat_log.write(f"{self.selected_model}: {reply}\n")
         if self.chat_input:
             self.chat_input.disabled = False
             self.set_focus(self.chat_input)

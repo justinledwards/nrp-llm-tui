@@ -37,3 +37,6 @@ The provided tasks automatically load `.env` if present:
 ```bash
 OPENAI_API_KEY=your_key_here
 ```
+
+## Logs
+- Runtime logs are written to `logs/tui.log`. The `logs/` directory is ignored by git by default.
