@@ -40,3 +40,5 @@ OPENAI_API_KEY=your_key_here
 
 ## Logs
 - Runtime logs are written to `logs/tui.log`. The `logs/` directory is ignored by git by default.
+- Each chat also writes a transcript to `logs/<session>-<timestamp>/<model>-<session>-<timestamp>.log`
+  (TUI uses the `tui` session label, CLI uses `--session` with a default of `cli`).

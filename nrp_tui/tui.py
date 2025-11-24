@@ -11,9 +11,8 @@ from textual.reactive import reactive
 
 from .client import NRPClient
 from .agent_stub import UserResponseAgent
+from .logging_utils import LOG_DIR
 
-LOG_DIR = Path(__file__).resolve().parent.parent / "logs"
-LOG_DIR.mkdir(parents=True, exist_ok=True)
 _logger = logging.getLogger("nrp_tui")
 if not _logger.handlers:
     _logger.setLevel(logging.INFO)
@@ -39,6 +38,7 @@ class ModelTableApp(App):
         self.chat_log: Optional[Log] = None
         self.chat_hint: Optional[Static] = None
         self.chat_input: Optional[Input] = None
+        self.session_label = "tui"
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -113,10 +113,19 @@ class ModelTableApp(App):
         model_id = row_key.value if hasattr(row_key, "value") else row_key
         model_id = str(model_id)
         self.selected_model = model_id
-        self.agent = UserResponseAgent(model=model_id)
+        self.agent = UserResponseAgent(
+            model=model_id, session_name=self.session_label
+        )
         if self.chat_log:
             self.chat_log.clear()
             self.chat_log.write(f"[system] Now chatting with {model_id}\n")
+            log_path = self.agent.log_path if self.agent else None
+            if log_path:
+                try:
+                    log_display = log_path.relative_to(Path.cwd())
+                except ValueError:
+                    log_display = log_path
+                self.chat_log.write(f"[system] Log file: {log_display}\n")
         if self.chat_hint:
             self.chat_hint.update(f"Chatting with {model_id}.")
         if self.chat_input:

@@ -2,7 +2,10 @@ from typing import List, Dict, Any
 
 from openai import OpenAI
 
+from pathlib import Path
+
 from .config import NRPConfig
+from .logging_utils import ConversationLogger
 
 
 class SimpleAgent:
@@ -44,17 +47,36 @@ class UserResponseAgent(SimpleAgent):
         "and actionable."
     )
 
-    def __init__(self, model: str = "gemma3", cfg: NRPConfig | None = None) -> None:
+    def __init__(
+        self,
+        model: str = "gemma3",
+        cfg: NRPConfig | None = None,
+        session_name: str | None = None,
+    ) -> None:
         super().__init__(model=model, cfg=cfg)
         self.history: List[Dict[str, str]] = [
             {"role": "system", "content": self.SYSTEM_MESSAGE}
         ]
+        self.session_logger = ConversationLogger(
+            model=model, session_name=session_name
+        )
+        self.session_logger.log_message("system", self.SYSTEM_MESSAGE)
 
     def send(self, user_message: str) -> str:
         """
         Appends the user message to history, sends to the model, and records the reply.
         """
         self.history.append({"role": "user", "content": user_message})
+        self.session_logger.log_message("user", user_message)
         reply = self.chat(self.history)
         self.history.append({"role": "assistant", "content": reply})
+        self.session_logger.log_message("assistant", reply)
         return reply
+
+    @property
+    def log_path(self) -> Path:
+        return self.session_logger.log_path
+
+    @property
+    def session_dir(self) -> Path:
+        return self.session_logger.session_dir

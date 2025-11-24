@@ -18,6 +18,11 @@ def main() -> None:
         default="gemma3",
         help="Model id to use (default: gemma3)",
     )
+    chat_parser.add_argument(
+        "--session",
+        default="cli",
+        help="Session label to use for conversation logs (default: cli)",
+    )
 
     args = parser.parse_args()
 
@@ -26,15 +31,16 @@ def main() -> None:
         models = client.list_models()
         pprint(models)
     elif args.cmd == "chat":
-        run_chat_cli(model=args.model)
+        run_chat_cli(model=args.model, session_name=args.session)
     else:
         run_tui()
 
 
-def run_chat_cli(model: str) -> None:
-    agent = UserResponseAgent(model=model)
+def run_chat_cli(model: str, session_name: str | None = None) -> None:
+    agent = UserResponseAgent(model=model, session_name=session_name)
     print(f"Starting chat with model '{model}' (Ctrl+C or 'exit' to quit)")
     print("System prompt: User Response agent focused on concise end-user replies.")
+    print(f"Conversation log: {agent.log_path}")
     while True:
         try:
             user_input = input("You: ").strip()
