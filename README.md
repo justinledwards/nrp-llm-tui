@@ -46,3 +46,15 @@ OPENAI_API_KEY=your_key_here
 - Runtime logs are written to `logs/tui.log`. The `logs/` directory is ignored by git by default.
 - Each chat session gets its own folder under `logs/` with metadata in `session.json`.
 - Per-model transcripts live in `logs/<session-id>/<model>-<session>-<timestamp>.log` plus a structured `*.jsonl` alongside it so previous chats can be resumed across models.
+
+## Testing
+Install dev dependencies and run pytest:
+```bash
+# option 1: using mise tasks
+mise run setup-dev   # create .venv and install app + dev deps
+mise run test        # runs pytest
+
+# option 2: manual
+pip install -r requirements.txt -r requirements-dev.txt
+pytest
+```

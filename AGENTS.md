@@ -7,7 +7,7 @@ This project currently ships a single end-user focused agent and a minimal base:
 
 ### How to chat
 
-- TUI: `mise run run`, select a model in the left pane, then type in the right chat input. The app uses the `UserResponseAgent` with the selected model.
+- TUI: `mise run run` to launch. On start you’ll get a session picker—select an existing session to resume history or enter a new name to start fresh. Then pick models in the left pane and chat on the right. The app uses `UserResponseAgent` with the selected model(s) and writes logs under `logs/<session-id>/`.
 - CLI: `mise run chat -- --model gemma3` (or another model id) for a terminal-only chat loop.
 - Programmatic example:
 
@@ -21,4 +21,9 @@ This project currently ships a single end-user focused agent and a minimal base:
 ### Requirements
 
 - Env var `OPENAI_API_KEY` set (optionally via `.env`).
-- Virtualenv installed via `mise run setup` before running chat/TUI commands.
+- Virtualenv installed via `mise run setup` (or `mise run setup-dev` if you also want tests) before running chat/TUI commands.
+
+### Testing
+
+- Install dev deps and run tests with `mise run setup-dev` then `mise run test` (uses pytest).
+- Manual: `pip install -r requirements.txt -r requirements-dev.txt` then `pytest`.

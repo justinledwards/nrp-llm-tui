@@ -10,6 +10,15 @@ uv venv .venv
 uv pip install -r requirements.txt
 """
 
+[tasks.setup-dev]
+description = "Create uv venv and install app + dev deps"
+env = { XDG_CACHE_HOME = ".cache", UV_CACHE_DIR = ".cache/uv" }
+dir = "{{config_root}}"
+run = """
+uv venv .venv
+uv pip install -r requirements.txt -r requirements-dev.txt
+"""
+
 [tasks.run]
 description = "Run TUI"
 env = { VIRTUAL_ENV = "{{config_root}}/.venv", PATH = "{{env.VIRTUAL_ENV}}/bin:{{env.PATH}}" }
@@ -41,4 +50,12 @@ set -a
 [ -f "{{config_root}}/.env" ] && . "{{config_root}}/.env"
 set +a
 {{env.VIRTUAL_ENV}}/bin/python -m nrp_tui chat --model gemma3
+"""
+
+[tasks.test]
+description = "Run pytest in the venv"
+env = { VIRTUAL_ENV = "{{config_root}}/.venv", PATH = "{{env.VIRTUAL_ENV}}/bin:{{env.PATH}}" }
+dir = "{{config_root}}"
+run = """
+{{env.VIRTUAL_ENV}}/bin/pytest
 """
