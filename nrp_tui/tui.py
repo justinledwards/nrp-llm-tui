@@ -1,5 +1,7 @@
 import asyncio
+import inspect
 import logging
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -27,15 +29,17 @@ class ModelTableApp(App):
     CSS_PATH = None
 
     loading: reactive[bool] = reactive(True)
-    selected_model: reactive[Optional[str]] = reactive(None)
     chat_pending: reactive[bool] = reactive(False)
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._models: List[Dict[str, Any]] = []
         self.client = NRPClient()
-        self.agent: Optional[UserResponseAgent] = None
-        self.chat_log: Optional[Log] = None
+        self.agents: Dict[str, UserResponseAgent] = {}
+        self.selected_models: set[str] = set()
+        self.chat_logs: Dict[str, Log] = {}
+        self.chat_log_panels: Dict[str, Vertical] = {}
+        self.chat_log_container: Optional[Horizontal] = None
         self.chat_hint: Optional[Static] = None
         self.chat_input: Optional[Input] = None
         self.session_label = "tui"
@@ -50,12 +54,8 @@ class ModelTableApp(App):
             ),
             Vertical(
                 Static("User Response Chat", id="chat_title"),
-                Static("Select a model to start chatting.", id="chat_hint"),
-                Log(
-                    id="chat_log",
-                    highlight=False,
-                    max_lines=500,
-                ),
+                Static("Select one or more models to start chatting.", id="chat_hint"),
+                Horizontal(id="chat_logs_container"),
                 Input(placeholder="Type a message and press Enter", id="chat_input"),
                 id="chat_panel",
             ),
@@ -66,6 +66,7 @@ class ModelTableApp(App):
         table: DataTable = self.query_one("#models_table", DataTable)
         table.cursor_type = "row"
         table.add_columns(
+            "Selected",
             "ID",
             "Status",
             "Params",
@@ -75,9 +76,9 @@ class ModelTableApp(App):
         )
 
         self.load_models()
-        self.chat_log = self.query_one("#chat_log", Log)
         self.chat_hint = self.query_one("#chat_hint", Static)
         self.chat_input = self.query_one("#chat_input", Input)
+        self.chat_log_container = self.query_one("#chat_logs_container", Horizontal)
         self.set_focus(table)
 
     def load_models(self) -> None:
@@ -92,6 +93,7 @@ class ModelTableApp(App):
             created_str = m["created"].strftime("%Y-%m-%d") if m["created"] else ""
             context_str = str(m["context_tokens"]) if m["context_tokens"] else ""
             table.add_row(
+                self._selected_indicator(m["id"]),
                 m["id"],
                 m["status"] or "",
                 m["parameters"] or "",
@@ -108,28 +110,12 @@ class ModelTableApp(App):
         self.load_models()
 
     @on(DataTable.RowSelected)
-    def handle_row_selected(self, event: DataTable.RowSelected) -> None:
+    async def handle_row_selected(self, event: DataTable.RowSelected) -> None:
         row_key = event.row_key
         model_id = row_key.value if hasattr(row_key, "value") else row_key
         model_id = str(model_id)
-        self.selected_model = model_id
-        self.agent = UserResponseAgent(
-            model=model_id, session_name=self.session_label
-        )
-        if self.chat_log:
-            self.chat_log.clear()
-            self.chat_log.write(f"[system] Now chatting with {model_id}\n")
-            log_path = self.agent.log_path if self.agent else None
-            if log_path:
-                try:
-                    log_display = log_path.relative_to(Path.cwd())
-                except ValueError:
-                    log_display = log_path
-                self.chat_log.write(f"[system] Log file: {log_display}\n")
-        if self.chat_hint:
-            self.chat_hint.update(f"Chatting with {model_id}.")
+        await self.toggle_model_selection(model_id, row_key=row_key)
         if self.chat_input:
-            self.chat_input.placeholder = f"Message for {model_id}"
             self.set_focus(self.chat_input)
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
@@ -139,34 +125,125 @@ class ModelTableApp(App):
         event.input.value = ""
         if not text:
             return
-        if not self.agent or not self.selected_model:
-            if self.chat_log:
-                self.chat_log.write("[warn] Select a model first.\n")
+        if not self.selected_models:
+            if self.chat_hint:
+                self.chat_hint.update("Select one or more models first.")
             return
 
-        if self.chat_log:
-            self.chat_log.write(f"You: {text}\n")
-            self.chat_log.write("[system] Waiting for response...\n")
         if self.chat_input:
             self.chat_input.disabled = True
             self.chat_pending = True
 
-        try:
-            reply = await asyncio.to_thread(self.agent.send, text)
-        except Exception as exc:  # pragma: no cover - runtime safety
-            _logger.exception("Chat request failed for model %s", self.selected_model)
-            if self.chat_log:
-                self.chat_log.write(f"[error] Chat request failed: {exc}\n")
-            return
+        sends: List[tuple[str, asyncio.Task[Any]]] = []
+        for model_id in list(self.selected_models):
+            log = self.chat_logs.get(model_id)
+            if log:
+                log.write(f"You: {text}\n")
+                log.write("[system] Waiting for response...\n")
+            agent = self.agents.get(model_id)
+            if agent:
+                sends.append((model_id, asyncio.to_thread(agent.send, text)))
 
-        if self.chat_log:
-            if self.chat_pending:
-                self.chat_log.write("[system] Response received.\n")
-            self.chat_log.write(f"{self.selected_model}: {reply}\n")
+        try:
+            results = await asyncio.gather(
+                *[task for _, task in sends], return_exceptions=True
+            )
+        except Exception as exc:  # pragma: no cover - runtime safety
+            _logger.exception("Chat request failed for models %s", self.selected_models)
+            results = [exc] * len(sends)
+
+        for (model_id, _), result in zip(sends, results):
+            log = self.chat_logs.get(model_id)
+            if isinstance(result, Exception):
+                _logger.exception("Chat request failed for model %s", model_id)
+                if log:
+                    log.write(f"[error] Chat request failed: {result}\n")
+                continue
+            if log:
+                if self.chat_pending:
+                    log.write("[system] Response received.\n")
+                log.write(f"{model_id}: {result}\n")
+
         if self.chat_input:
             self.chat_input.disabled = False
             self.set_focus(self.chat_input)
         self.chat_pending = False
+
+    async def toggle_model_selection(self, model_id: str, row_key: Any | None = None) -> None:
+        table: DataTable = self.query_one("#models_table", DataTable)
+        target_row_key = row_key if row_key is not None else model_id
+        if model_id in self.selected_models:
+            self.selected_models.remove(model_id)
+            self.agents.pop(model_id, None)
+            panel = self.chat_log_panels.pop(model_id, None)
+            self.chat_logs.pop(model_id, None)
+            if panel:
+                removed = panel.remove()
+                if inspect.isawaitable(removed):
+                    await removed
+            try:
+                table.update_cell(target_row_key, "Selected", "")
+            except Exception:
+                _logger.warning("Unable to update selection cell for %s", model_id)
+            if self.chat_hint:
+                hint = (
+                    "Select one or more models to start chatting."
+                    if not self.selected_models
+                    else f"Chatting with: {', '.join(sorted(self.selected_models))}"
+                )
+                self.chat_hint.update(hint)
+            if self.chat_input and not self.selected_models:
+                self.chat_input.placeholder = "Type a message and press Enter"
+            return
+
+        agent = UserResponseAgent(model=model_id, session_name=self.session_label)
+        self.agents[model_id] = agent
+        self.selected_models.add(model_id)
+        await self._add_chat_panel(model_id, agent)
+        try:
+            table.update_cell(target_row_key, "Selected", "✓")
+        except Exception:
+            _logger.warning("Unable to update selection cell for %s", model_id)
+        if self.chat_hint:
+            self.chat_hint.update(
+                f"Chatting with: {', '.join(sorted(self.selected_models))}"
+            )
+        if self.chat_input:
+            self.chat_input.placeholder = f"Message for {', '.join(sorted(self.selected_models))}"
+
+    def _selected_indicator(self, model_id: str) -> str:
+        return "✓" if model_id in self.selected_models else ""
+
+    async def _add_chat_panel(self, model_id: str, agent: UserResponseAgent) -> None:
+        if not self.chat_log_container:
+            return
+        panel_id = f"chat_panel_{self._slug(model_id)}"
+        log_widget = Log(
+            id=f"chat_log_{self._slug(model_id)}",
+            highlight=False,
+            max_lines=500,
+        )
+        self.chat_logs[model_id] = log_widget
+        try:
+            log_display = agent.log_path.relative_to(Path.cwd())
+        except ValueError:
+            log_display = agent.log_path
+
+        panel = Vertical(
+            Static(f"{model_id}", id=f"chat_label_{self._slug(model_id)}"),
+            Static(f"Log: {log_display}", id=f"chat_log_path_{self._slug(model_id)}"),
+            log_widget,
+            id=panel_id,
+        )
+        self.chat_log_panels[model_id] = panel
+        mounted = self.chat_log_container.mount(panel)
+        if inspect.isawaitable(mounted):
+            await mounted
+        log_widget.write(f"[system] Now chatting with {model_id}\n")
+        log_widget.write(f"[system] Log file: {log_display}\n")
+
+    def _slug(self, label: str) -> str:
+        return re.sub(r"[^A-Za-z0-9_.-]+", "_", label)
 
 
 def run_tui() -> None:
