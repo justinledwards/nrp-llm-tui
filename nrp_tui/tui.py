@@ -1,5 +1,6 @@
 import asyncio
 import inspect
+import itertools
 import logging
 import re
 from pathlib import Path
@@ -8,7 +9,15 @@ from typing import Any, Dict, List, Optional
 from textual import on
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
-from textual.widgets import Header, Footer, DataTable, Static, Input, Log
+from textual.widgets import (
+    Footer,
+    Header,
+    Input,
+    Log,
+    SelectionList,
+    Static,
+)
+from textual.widgets.selection_list import Selection
 from textual.reactive import reactive
 
 from .client import NRPClient
@@ -42,10 +51,11 @@ class ModelTableApp(App):
         self.chat_logs: Dict[str, Log] = {}
         self.chat_log_panels: Dict[str, Vertical] = {}
         self.chat_log_container: Optional[Horizontal] = None
+        self.model_list: Optional[SelectionList[str]] = None
         self.chat_status: Dict[str, Static] = {}
         self.chat_hint: Optional[Static] = None
         self.chat_input: Optional[Input] = None
-        self.selected_column_key: Any | None = None
+        self.status_spinners: Dict[str, Any] = {}
         self.session_label = "tui"
 
     def compose(self) -> ComposeResult:
@@ -53,7 +63,7 @@ class ModelTableApp(App):
         yield Horizontal(
             Vertical(
                 Static("NRP Managed LLMs", id="title"),
-                DataTable(id="models_table"),
+                SelectionList[str](id="models_list"),
                 id="model_panel",
             ),
             Vertical(
@@ -67,20 +77,8 @@ class ModelTableApp(App):
         yield Footer()
 
     def on_mount(self) -> None:
-        table: DataTable = self.query_one("#models_table", DataTable)
-        table.cursor_type = "row"
-        columns = table.add_columns(
-            "Selected",
-            "ID",
-            "Status",
-            "Params",
-            "Context",
-            "Created",
-            "Features",
-        )
-        if columns:
-            self.selected_column_key = columns[0]
-
+        # Note: older Textual versions error on subscripted generics in query_one.
+        self.model_list = self.query_one("#models_list", SelectionList)
         self.load_models()
         self.chat_hint = self.query_one("#chat_hint", Static)
         self.chat_input = self.query_one("#chat_input", Input)
@@ -91,29 +89,44 @@ class ModelTableApp(App):
             self.query_one("#chat_panel").styles.width = "2fr"
         except Exception:
             pass
-        self.set_focus(table)
+        if self.model_list:
+            self.set_focus(self.model_list)
 
     def load_models(self) -> None:
         self.loading = True
         models = self.client.list_models()
         self._models = models
-
-        table: DataTable = self.query_one("#models_table", DataTable)
-        table.clear()
-
-        for m in models:
-            created_str = m["created"].strftime("%Y-%m-%d") if m["created"] else ""
-            context_str = str(m["context_tokens"]) if m["context_tokens"] else ""
-            table.add_row(
-                self._selected_indicator(m["id"]),
-                m["id"],
-                m["status"] or "",
-                m["parameters"] or "",
-                context_str,
-                created_str,
-                m["features"] or "",
-                key=m["id"],
+        if self.model_list:
+            # Preserve existing selections
+            current_selected = set(self.selected_models)
+            current_selected.update(
+                str(getattr(sel, "value", sel)) for sel in self.model_list.selected
             )
+            self.model_list.clear_options()
+            options: List[Selection[str]] = []
+            for m in models:
+                created_str = m["created"].strftime("%Y-%m-%d") if m["created"] else ""
+                context_str = str(m["context_tokens"]) if m["context_tokens"] else ""
+                label_parts = [m["id"]]
+                if m["status"]:
+                    label_parts.append(f"[{m['status']}]")
+                if m["parameters"]:
+                    label_parts.append(str(m["parameters"]))
+                if context_str:
+                    label_parts.append(f"ctx {context_str}")
+                if created_str:
+                    label_parts.append(created_str)
+                label = " ".join(label_parts)
+                options.append(
+                    Selection(
+                        label,
+                        m["id"],
+                        m["id"] in current_selected,
+                    )
+                )
+            for opt in options:
+                # add_option is most compatible across Textual versions
+                self.model_list.add_option(opt)
 
         self.loading = False
 
@@ -121,13 +134,38 @@ class ModelTableApp(App):
         """Refresh model list."""
         self.load_models()
 
-    @on(DataTable.RowSelected)
-    async def handle_row_selected(self, event: DataTable.RowSelected) -> None:
-        row_key = event.row_key
-        model_id = row_key.value if hasattr(row_key, "value") else row_key
-        model_id = str(model_id)
-        await self.toggle_model_selection(model_id, row_key=row_key)
+    @on(SelectionList.SelectedChanged)
+    async def handle_selection_changed(self, event: SelectionList.SelectedChanged) -> None:
+        selection_list = getattr(event, "selection_list", None) or self.model_list
+        if not selection_list:
+            return
+        selections = selection_list.selected
+        new_selected = {
+            str(getattr(sel, "value", sel)) for sel in selections  # type: ignore[attr-defined]
+        }
+        to_add = new_selected - self.selected_models
+        to_remove = self.selected_models - new_selected
+
+        for model_id in list(to_remove):
+            await self._remove_model(model_id)
+        for model_id in list(to_add):
+            await self._add_model(model_id)
+
+        self.selected_models = new_selected
+        if self.chat_hint:
+            hint = (
+                "Select one or more models to start chatting."
+                if not self.selected_models
+                else f"Chatting with: {', '.join(sorted(self.selected_models))}"
+            )
+            self.chat_hint.update(hint)
         if self.chat_input:
+            if self.selected_models:
+                self.chat_input.placeholder = (
+                    f"Message for {', '.join(sorted(self.selected_models))}"
+                )
+            else:
+                self.chat_input.placeholder = "Type a message and press Enter"
             self.set_focus(self.chat_input)
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
@@ -188,68 +226,29 @@ class ModelTableApp(App):
             self.set_focus(self.chat_input)
         self.chat_pending = False
 
-    async def toggle_model_selection(self, model_id: str, row_key: Any | None = None) -> None:
-        table: DataTable = self.query_one("#models_table", DataTable)
-        target_row_key = row_key if row_key is not None else model_id
-        if model_id in self.selected_models:
-            self.selected_models.remove(model_id)
-            self.agents.pop(model_id, None)
-            panel = self.chat_log_panels.pop(model_id, None)
-            self.chat_logs.pop(model_id, None)
-            if panel:
-                removed = panel.remove()
-                if inspect.isawaitable(removed):
-                    await removed
+    async def _remove_model(self, model_id: str) -> None:
+        self.selected_models.discard(model_id)
+        self.agents.pop(model_id, None)
+        panel = self.chat_log_panels.pop(model_id, None)
+        self.chat_logs.pop(model_id, None)
+        self.chat_status.pop(model_id, None)
+        spinner = self.status_spinners.pop(model_id, None)
+        if spinner:
             try:
-                col_key = self.selected_column_key or "Selected"
-                table.update_cell(
-                    target_row_key,
-                    col_key,
-                    self._selected_indicator(model_id, selected=False),
-                )
+                spinner.stop()
             except Exception:
-                _logger.warning("Unable to update selection cell for %s", model_id)
-            if self.chat_hint:
-                hint = (
-                    "Select one or more models to start chatting."
-                    if not self.selected_models
-                    else f"Chatting with: {', '.join(sorted(self.selected_models))}"
-                )
-                self.chat_hint.update(hint)
-            if self.chat_input and not self.selected_models:
-                self.chat_input.placeholder = "Type a message and press Enter"
-            return
+                pass
+        if panel:
+            removed = panel.remove()
+            if inspect.isawaitable(removed):
+                await removed
 
+    async def _add_model(self, model_id: str) -> None:
+        if model_id in self.agents:
+            return
         agent = UserResponseAgent(model=model_id, session_name=self.session_label)
         self.agents[model_id] = agent
-        self.selected_models.add(model_id)
         await self._add_chat_panel(model_id, agent)
-        try:
-            col_key = self.selected_column_key or "Selected"
-            table.update_cell(
-                target_row_key,
-                col_key,
-                self._selected_indicator(model_id, selected=True),
-            )
-        except Exception:
-            _logger.warning("Unable to update selection cell for %s", model_id)
-        if self.chat_hint:
-            self.chat_hint.update(
-                f"Chatting with: {', '.join(sorted(self.selected_models))}"
-            )
-        if self.chat_input:
-            self.chat_input.placeholder = f"Message for {', '.join(sorted(self.selected_models))}"
-
-    def _selected_indicator(
-        self, model_id: str, selected: Optional[bool] = None
-    ) -> str:
-        state = (
-            self.selected_models.__contains__(model_id)
-            if selected is None
-            else selected
-        )
-        # Use simple text markers to avoid markup incompatibility across Textual versions.
-        return "☑" if state else "☐"
 
     async def _add_chat_panel(self, model_id: str, agent: UserResponseAgent) -> None:
         if not self.chat_log_container:
@@ -292,14 +291,30 @@ class ModelTableApp(App):
         status = self.chat_status.get(model_id)
         if not status:
             return
+        # Simple text spinner via interval timer to keep dependencies minimal.
         if state == "waiting":
-            status.update("[waiting...]")
-        elif state == "ok":
-            status.update("[ok]")
-        elif state == "error":
-            status.update("[error]")
+            if model_id in self.status_spinners:
+                return
+            spinner_iter = itertools.cycle(["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"])
+
+            def spin() -> None:
+                status.update(f"[waiting {next(spinner_iter)}]")
+
+            timer = self.set_interval(0.1, spin)
+            self.status_spinners[model_id] = timer
         else:
-            status.update(f"[{state}]")
+            timer = self.status_spinners.pop(model_id, None)
+            if timer:
+                try:
+                    timer.stop()
+                except Exception:
+                    pass
+            if state == "ok":
+                status.update("[ok]")
+            elif state == "error":
+                status.update("[error]")
+            else:
+                status.update(f"[{state}]")
 
 
 def run_tui() -> None:
