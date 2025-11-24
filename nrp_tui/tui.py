@@ -42,6 +42,7 @@ class ModelTableApp(App):
         self.chat_log_container: Optional[Horizontal] = None
         self.chat_hint: Optional[Static] = None
         self.chat_input: Optional[Input] = None
+        self.selected_column_key: Any | None = None
         self.session_label = "tui"
 
     def compose(self) -> ComposeResult:
@@ -65,7 +66,7 @@ class ModelTableApp(App):
     def on_mount(self) -> None:
         table: DataTable = self.query_one("#models_table", DataTable)
         table.cursor_type = "row"
-        table.add_columns(
+        columns = table.add_columns(
             "Selected",
             "ID",
             "Status",
@@ -74,11 +75,19 @@ class ModelTableApp(App):
             "Created",
             "Features",
         )
+        if columns:
+            self.selected_column_key = columns[0]
 
         self.load_models()
         self.chat_hint = self.query_one("#chat_hint", Static)
         self.chat_input = self.query_one("#chat_input", Input)
         self.chat_log_container = self.query_one("#chat_logs_container", Horizontal)
+        # Bias layout: left panel ~1/3, right panel ~2/3 for more chat space.
+        try:
+            self.query_one("#model_panel").styles.width = "1fr"
+            self.query_one("#chat_panel").styles.width = "2fr"
+        except Exception:
+            pass
         self.set_focus(table)
 
     def load_models(self) -> None:
@@ -182,7 +191,12 @@ class ModelTableApp(App):
                 if inspect.isawaitable(removed):
                     await removed
             try:
-                table.update_cell(target_row_key, "Selected", "")
+                col_key = self.selected_column_key or "Selected"
+                table.update_cell(
+                    target_row_key,
+                    col_key,
+                    self._selected_indicator(model_id, selected=False),
+                )
             except Exception:
                 _logger.warning("Unable to update selection cell for %s", model_id)
             if self.chat_hint:
@@ -201,7 +215,12 @@ class ModelTableApp(App):
         self.selected_models.add(model_id)
         await self._add_chat_panel(model_id, agent)
         try:
-            table.update_cell(target_row_key, "Selected", "✓")
+            col_key = self.selected_column_key or "Selected"
+            table.update_cell(
+                target_row_key,
+                col_key,
+                self._selected_indicator(model_id, selected=True),
+            )
         except Exception:
             _logger.warning("Unable to update selection cell for %s", model_id)
         if self.chat_hint:
@@ -211,8 +230,16 @@ class ModelTableApp(App):
         if self.chat_input:
             self.chat_input.placeholder = f"Message for {', '.join(sorted(self.selected_models))}"
 
-    def _selected_indicator(self, model_id: str) -> str:
-        return "✓" if model_id in self.selected_models else ""
+    def _selected_indicator(
+        self, model_id: str, selected: Optional[bool] = None
+    ) -> str:
+        state = (
+            self.selected_models.__contains__(model_id)
+            if selected is None
+            else selected
+        )
+        # Use simple text markers to avoid markup incompatibility across Textual versions.
+        return "☑" if state else "☐"
 
     async def _add_chat_panel(self, model_id: str, agent: UserResponseAgent) -> None:
         if not self.chat_log_container:
