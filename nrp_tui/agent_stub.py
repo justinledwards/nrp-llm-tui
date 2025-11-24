@@ -6,6 +6,7 @@ from pathlib import Path
 
 from .config import NRPConfig
 from .logging_utils import ConversationLogger
+from .sessions import Session, SessionStore
 
 
 class SimpleAgent:
@@ -51,14 +52,25 @@ class UserResponseAgent(SimpleAgent):
         self,
         model: str = "gemma3",
         cfg: NRPConfig | None = None,
+        session: Session | None = None,
         session_name: str | None = None,
+        load_history: bool = False,
     ) -> None:
         super().__init__(model=model, cfg=cfg)
-        self.history: List[Dict[str, str]] = [
-            {"role": "system", "content": self.SYSTEM_MESSAGE}
-        ]
-        self.session_logger = ConversationLogger(model=model, session_name=session_name)
+        self.session = session or SessionStore().get_or_create(
+            session_name or "session", resume=True
+        )
+        self.session_logger = ConversationLogger(model=model, session=self.session)
         self.session_logger.set_system_message(self.SYSTEM_MESSAGE)
+        if load_history:
+            history = self.session_logger.read_messages()
+        else:
+            history = []
+        if not history:
+            history = [{"role": "system", "content": self.SYSTEM_MESSAGE}]
+        elif not any(msg.get("role") == "system" for msg in history):
+            history.insert(0, {"role": "system", "content": self.SYSTEM_MESSAGE})
+        self.history: List[Dict[str, str]] = history
 
     def send(self, user_message: str) -> str:
         """

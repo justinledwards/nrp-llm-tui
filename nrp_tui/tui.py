@@ -23,6 +23,7 @@ from textual.reactive import reactive
 from .client import NRPClient
 from .agent_stub import UserResponseAgent
 from .logging_utils import LOG_DIR
+from .sessions import Session, SessionStore
 
 _logger = logging.getLogger("nrp_tui")
 if not _logger.handlers:
@@ -42,7 +43,13 @@ class ModelTableApp(App):
     loading: reactive[bool] = reactive(True)
     chat_pending: reactive[bool] = reactive(False)
 
-    def __init__(self, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        session: Session | None = None,
+        *,
+        resume: bool = True,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(**kwargs)
         self._models: List[Dict[str, Any]] = []
         self.client = NRPClient()
@@ -56,7 +63,8 @@ class ModelTableApp(App):
         self.chat_hint: Optional[Static] = None
         self.chat_input: Optional[Input] = None
         self.status_spinners: Dict[str, Any] = {}
-        self.session_label = "tui"
+        self.resume = resume
+        self.session = session or SessionStore().get_or_create("tui", resume=resume)
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -81,6 +89,11 @@ class ModelTableApp(App):
         self.model_list = self.query_one("#models_list", SelectionList)
         self.load_models()
         self.chat_hint = self.query_one("#chat_hint", Static)
+        try:
+            chat_title = self.query_one("#chat_title", Static)
+            chat_title.update(f"User Response Chat (session: {self.session.display_name})")
+        except Exception:
+            pass
         self.chat_input = self.query_one("#chat_input", Input)
         self.chat_log_container = self.query_one("#chat_logs_container", Horizontal)
         # Bias layout: left panel ~1/3, right panel ~2/3 for more chat space.
@@ -246,7 +259,11 @@ class ModelTableApp(App):
     async def _add_model(self, model_id: str) -> None:
         if model_id in self.agents:
             return
-        agent = UserResponseAgent(model=model_id, session_name=self.session_label)
+        agent = UserResponseAgent(
+            model=model_id,
+            session=self.session,
+            load_history=self.resume,
+        )
         self.agents[model_id] = agent
         await self._add_chat_panel(model_id, agent)
 
@@ -276,8 +293,11 @@ class ModelTableApp(App):
         mounted = self.chat_log_container.mount(panel)
         if inspect.isawaitable(mounted):
             await mounted
-        log_widget.write(f"[system] Now chatting with {model_id}\n")
+        log_widget.write(
+            f"[system] Now chatting with {model_id} (session: {self.session.display_name})\n"
+        )
         log_widget.write(f"[system] Log file: {log_display}\n")
+        self._render_history(log_widget, agent.history, model_id)
 
     def _slug(self, label: str) -> str:
         return re.sub(r"[^A-Za-z0-9_.-]+", "_", label)
@@ -316,7 +336,27 @@ class ModelTableApp(App):
             else:
                 status.update(f"[{state}]")
 
+    def _render_history(self, log_widget: Log, history: List[Dict[str, str]], model_id: str) -> None:
+        """
+        Render prior history (loaded from logs) into the chat log widget.
+        """
+        past = [msg for msg in history if msg.get("role") != "system"]
+        if not past:
+            return
+        log_widget.write(f"[system] Loaded {len(past)} previous message(s).\n")
+        for msg in past:
+            role = msg.get("role")
+            content = msg.get("content", "")
+            if role == "user":
+                log_widget.write(f"You: {content}\n")
+            elif role == "assistant":
+                log_widget.write(f"{model_id}: {content}\n")
+            else:
+                log_widget.write(f"[{role}] {content}\n")
 
-def run_tui() -> None:
-    app = ModelTableApp()
+
+def run_tui(session_label: str = "tui", resume: bool = True) -> None:
+    store = SessionStore()
+    session = store.get_or_create(session_label, resume=resume)
+    app = ModelTableApp(session=session, resume=resume)
     app.run()

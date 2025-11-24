@@ -14,13 +14,17 @@ mise run setup
 ## Usage
 - TUI (model list + chat pane):
   ```bash
-  mise run run
+  mise run run               # default session name: tui (resumes if it exists)
+  mise run run -- --session demo       # custom session name
+  mise run run -- --session demo --new-session  # force a fresh session
   ```
   Select a model in the left table, then type in the chat input on the right. Input is disabled while the model is responding; replies are not streamed yet.
 
 - CLI chat:
   ```bash
-  mise run chat -- --model gemma3
+  mise run chat -- --model gemma3           # session name defaults to cli
+  mise run chat -- --model gemma3 --session demo   # reuse/create "demo" session
+  mise run chat -- --new-session                    # force a fresh session
   ```
   Replace `gemma3` with any available model id.
 
@@ -40,5 +44,5 @@ OPENAI_API_KEY=your_key_here
 
 ## Logs
 - Runtime logs are written to `logs/tui.log`. The `logs/` directory is ignored by git by default.
-- Each chat also writes a transcript to `logs/<session>-<timestamp>/<model>-<session>-<timestamp>.log`
-  (TUI uses the `tui` session label, CLI uses `--session` with a default of `cli`).
+- Each chat session gets its own folder under `logs/` with metadata in `session.json`.
+- Per-model transcripts live in `logs/<session-id>/<model>-<session>-<timestamp>.log` plus a structured `*.jsonl` alongside it so previous chats can be resumed across models.
