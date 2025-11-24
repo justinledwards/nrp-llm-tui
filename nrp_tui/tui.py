@@ -9,7 +9,9 @@ from typing import Any, Dict, List, Optional
 from textual import on
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
+from textual.reactive import reactive
 from textual.widgets import (
+    Button,
     Footer,
     Header,
     Input,
@@ -18,7 +20,7 @@ from textual.widgets import (
     Static,
 )
 from textual.widgets.selection_list import Selection
-from textual.reactive import reactive
+from textual.screen import Screen
 
 from .client import NRPClient
 from .agent_stub import UserResponseAgent
@@ -35,6 +37,101 @@ if not _logger.handlers:
     _logger.addHandler(handler)
 
 
+class SessionSelectScreen(Screen[Session]):
+    """
+    Simple start screen to pick an existing session or create a new one.
+    """
+
+    def __init__(self, store: SessionStore) -> None:
+        super().__init__()
+        self.store = store
+        self.session_list: Optional[SelectionList[str]] = None
+        self.session_input: Optional[Input] = None
+        self.status: Optional[Static] = None
+
+    def compose(self) -> ComposeResult:
+        yield Header(show_clock=False)
+        yield Vertical(
+            Static("Select or create a session", id="session_title"),
+            SelectionList[str](id="session_list"),
+            Input(placeholder="Session name (enter to create/resume)", id="session_input"),
+            Horizontal(
+                Button("Resume Selected", id="resume_button"),
+                Button("New Session", id="new_button", variant="primary"),
+                id="session_buttons",
+            ),
+            Static("", id="session_status"),
+        )
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self.session_list = self.query_one("#session_list", SelectionList)
+        self.session_input = self.query_one("#session_input", Input)
+        self.status = self.query_one("#session_status", Static)
+        self._load_sessions()
+        if self.session_input:
+            self.set_focus(self.session_input)
+
+    def _load_sessions(self) -> None:
+        if not self.session_list:
+            return
+        self.session_list.clear_options()
+        sessions = self.store.list_sessions()
+        for sess in sessions:
+            label = f"{sess.display_name} ({sess.created_at.strftime('%Y-%m-%d %H:%M')})"
+            self.session_list.add_option(
+                Selection(label, sess.id)
+            )
+        if sessions:
+            try:
+                self.session_list.index = 0
+            except Exception:
+                pass
+
+    def _dismiss(self, session: Session) -> None:
+        self.dismiss(session)
+
+    def _show_status(self, message: str) -> None:
+        if self.status:
+            self.status.update(message)
+
+    def _resume_selected(self) -> None:
+        if self.session_list and self.session_list.selected:
+            selected = self.session_list.selected[0]
+            session_id = str(getattr(selected, "value", selected))
+            try:
+                session = self.store.load(session_id)
+                return self._dismiss(session)
+            except Exception as exc:
+                self._show_status(f"Failed to load session: {exc}")
+                return
+        if self.session_input:
+            label = self.session_input.value.strip()
+            if label:
+                session = self.store.get_or_create(label, resume=True)
+                return self._dismiss(session)
+        self._show_status("Select a session or enter a name.")
+
+    def _create_new(self) -> None:
+        label = "session"
+        if self.session_input:
+            value = self.session_input.value.strip()
+            if value:
+                label = value
+        session = self.store.create(label)
+        self._dismiss(session)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "resume_button":
+            self._resume_selected()
+        elif event.button.id == "new_button":
+            self._create_new()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id == "session_input":
+            self._resume_selected()
+
+
 class ModelTableApp(App):
     CSS_PATH = None
 
@@ -48,6 +145,7 @@ class ModelTableApp(App):
         session: Session | None = None,
         *,
         resume: bool = True,
+        store: SessionStore | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
@@ -64,7 +162,8 @@ class ModelTableApp(App):
         self.chat_input: Optional[Input] = None
         self.status_spinners: Dict[str, Any] = {}
         self.resume = resume
-        self.session = session or SessionStore().get_or_create("tui", resume=resume)
+        self.store = store or SessionStore()
+        self.session = session
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -84,14 +183,14 @@ class ModelTableApp(App):
         )
         yield Footer()
 
-    def on_mount(self) -> None:
+    async def on_mount(self) -> None:
         # Note: older Textual versions error on subscripted generics in query_one.
         self.model_list = self.query_one("#models_list", SelectionList)
         self.load_models()
         self.chat_hint = self.query_one("#chat_hint", Static)
         try:
             chat_title = self.query_one("#chat_title", Static)
-            chat_title.update(f"User Response Chat (session: {self.session.display_name})")
+            chat_title.update("User Response Chat (session: pending)")
         except Exception:
             pass
         self.chat_input = self.query_one("#chat_input", Input)
@@ -104,6 +203,56 @@ class ModelTableApp(App):
             pass
         if self.model_list:
             self.set_focus(self.model_list)
+
+        # Prompt for a session if one was not provided.
+        if not self.session:
+            self.push_screen(SessionSelectScreen(self.store), self._on_session_selected)
+        else:
+            self._apply_session(self.session)
+
+    def _on_session_selected(self, session: Session | None) -> None:
+        if session:
+            self._apply_session(session)
+
+    def _apply_session(self, session: Session) -> None:
+        self.session = session
+        try:
+            chat_title = self.query_one("#chat_title", Static)
+            chat_title.update(f"User Response Chat (session: {self.session.display_name})")
+        except Exception:
+            pass
+        if self.resume:
+            # Restore any models previously used in this session.
+            self.run_worker(self._restore_previous_models, exclusive=False)
+
+    async def _restore_previous_models(self) -> None:
+        if not self.session:
+            return
+        models = self._discover_session_models(self.session)
+        if not models:
+            return
+        for model_id in models:
+            if model_id in self.agents:
+                continue
+            try:
+                await self._add_model(model_id)
+            except Exception:
+                _logger.exception("Failed to restore model %s for session %s", model_id, self.session.id)
+
+    def _discover_session_models(self, session: Session) -> List[str]:
+        """
+        Inspect session logs to find models used in this session.
+        """
+        models: List[str] = []
+        suffix = f"-{session.label}-{session.created_tag}.jsonl"
+        for path in session.path.glob(f"*{suffix}"):
+            name = path.name
+            if not name.endswith(suffix):
+                continue
+            model = name[: -len(suffix)]
+            if model:
+                models.append(model)
+        return models
 
     def load_models(self) -> None:
         self.loading = True
@@ -259,6 +408,9 @@ class ModelTableApp(App):
     async def _add_model(self, model_id: str) -> None:
         if model_id in self.agents:
             return
+        if not self.session:
+            _logger.warning("No session selected; cannot add model %s", model_id)
+            return
         agent = UserResponseAgent(
             model=model_id,
             session=self.session,
@@ -355,8 +507,10 @@ class ModelTableApp(App):
                 log_widget.write(f"[{role}] {content}\n")
 
 
-def run_tui(session_label: str = "tui", resume: bool = True) -> None:
+def run_tui(session_label: str | None = None, resume: bool = True) -> None:
     store = SessionStore()
-    session = store.get_or_create(session_label, resume=resume)
-    app = ModelTableApp(session=session, resume=resume)
+    session = None
+    if session_label:
+        session = store.get_or_create(session_label, resume=resume)
+    app = ModelTableApp(session=session, resume=resume, store=store)
     app.run()

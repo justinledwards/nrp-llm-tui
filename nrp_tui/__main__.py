@@ -14,8 +14,8 @@ def main() -> None:
     tui_parser = sub.add_parser("tui", help="Launch interactive TUI (default)")
     tui_parser.add_argument(
         "--session",
-        default="tui",
-        help="Session name to load or create (default: tui)",
+        default=None,
+        help="Session name to load or create (default: prompt in UI)",
     )
     tui_parser.add_argument(
         "--new-session",

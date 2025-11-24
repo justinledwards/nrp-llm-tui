@@ -14,8 +14,8 @@ mise run setup
 ## Usage
 - TUI (model list + chat pane):
   ```bash
-  mise run run               # default session name: tui (resumes if it exists)
-  mise run run -- --session demo       # custom session name
+  mise run run               # launches session picker (resume or create)
+  mise run run -- --session demo       # skip picker, use/create named session
   mise run run -- --session demo --new-session  # force a fresh session
   ```
   Select a model in the left table, then type in the chat input on the right. Input is disabled while the model is responding; replies are not streamed yet.
