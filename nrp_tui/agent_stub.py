@@ -57,10 +57,8 @@ class UserResponseAgent(SimpleAgent):
         self.history: List[Dict[str, str]] = [
             {"role": "system", "content": self.SYSTEM_MESSAGE}
         ]
-        self.session_logger = ConversationLogger(
-            model=model, session_name=session_name
-        )
-        self.session_logger.log_message("system", self.SYSTEM_MESSAGE)
+        self.session_logger = ConversationLogger(model=model, session_name=session_name)
+        self.session_logger.set_system_message(self.SYSTEM_MESSAGE)
 
     def send(self, user_message: str) -> str:
         """

@@ -28,6 +28,8 @@ if not _logger.handlers:
 class ModelTableApp(App):
     CSS_PATH = None
 
+    MAX_RESPONSE_SECONDS = 30
+
     loading: reactive[bool] = reactive(True)
     chat_pending: reactive[bool] = reactive(False)
 
@@ -40,6 +42,7 @@ class ModelTableApp(App):
         self.chat_logs: Dict[str, Log] = {}
         self.chat_log_panels: Dict[str, Vertical] = {}
         self.chat_log_container: Optional[Horizontal] = None
+        self.chat_status: Dict[str, Static] = {}
         self.chat_hint: Optional[Static] = None
         self.chat_input: Optional[Input] = None
         self.selected_column_key: Any | None = None
@@ -149,9 +152,13 @@ class ModelTableApp(App):
             if log:
                 log.write(f"You: {text}\n")
                 log.write("[system] Waiting for response...\n")
+            self._set_status(model_id, "waiting")
             agent = self.agents.get(model_id)
             if agent:
-                sends.append((model_id, asyncio.to_thread(agent.send, text)))
+                send_task = asyncio.wait_for(
+                    asyncio.to_thread(agent.send, text), timeout=self.MAX_RESPONSE_SECONDS
+                )
+                sends.append((model_id, send_task))
 
         try:
             results = await asyncio.gather(
@@ -166,12 +173,15 @@ class ModelTableApp(App):
             if isinstance(result, Exception):
                 _logger.exception("Chat request failed for model %s", model_id)
                 if log:
-                    log.write(f"[error] Chat request failed: {result}\n")
+                    msg = "timed out" if isinstance(result, asyncio.TimeoutError) else f"failed: {result}"
+                    log.write(f"[error] Chat request {msg}\n")
+                self._set_status(model_id, "error")
                 continue
             if log:
                 if self.chat_pending:
                     log.write("[system] Response received.\n")
                 log.write(f"{model_id}: {result}\n")
+            self._set_status(model_id, "ok")
 
         if self.chat_input:
             self.chat_input.disabled = False
@@ -259,6 +269,7 @@ class ModelTableApp(App):
         panel = Vertical(
             Static(f"{model_id}", id=f"chat_label_{self._slug(model_id)}"),
             Static(f"Log: {log_display}", id=f"chat_log_path_{self._slug(model_id)}"),
+            self._status_widget(model_id),
             log_widget,
             id=panel_id,
         )
@@ -271,6 +282,24 @@ class ModelTableApp(App):
 
     def _slug(self, label: str) -> str:
         return re.sub(r"[^A-Za-z0-9_.-]+", "_", label)
+
+    def _status_widget(self, model_id: str) -> Static:
+        status = Static("[idle]", id=f"chat_status_{self._slug(model_id)}")
+        self.chat_status[model_id] = status
+        return status
+
+    def _set_status(self, model_id: str, state: str) -> None:
+        status = self.chat_status.get(model_id)
+        if not status:
+            return
+        if state == "waiting":
+            status.update("[waiting...]")
+        elif state == "ok":
+            status.update("[ok]")
+        elif state == "error":
+            status.update("[error]")
+        else:
+            status.update(f"[{state}]")
 
 
 def run_tui() -> None:
