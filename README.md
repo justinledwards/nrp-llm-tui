@@ -18,7 +18,7 @@ mise run setup
   mise run run -- --session demo       # skip picker, use/create named session
   mise run run -- --session demo --new-session  # force a fresh session
   ```
-  Select a model in the left table, then type in the chat input on the right. Input is disabled while the model is responding; replies are not streamed yet.
+  Select a model in the left table, then type in the chat input on the right. The session picker also lets you delete old sessions. Input is disabled while the model is responding; replies are not streamed yet.
 
 - CLI chat:
   ```bash

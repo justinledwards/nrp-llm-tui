@@ -7,7 +7,7 @@ This project currently ships a single end-user focused agent and a minimal base:
 
 ### How to chat
 
-- TUI: `mise run run` to launch. On start you’ll get a session picker—select an existing session to resume history or enter a new name to start fresh. Then pick models in the left pane and chat on the right. The app uses `UserResponseAgent` with the selected model(s) and writes logs under `logs/<session-id>/`.
+- TUI: `mise run run` to launch. On start you’ll get a session picker—select an existing session to resume history, enter a new name to start fresh, or delete an old session. Then pick models in the left pane and chat on the right. The app uses `UserResponseAgent` with the selected model(s) and writes logs under `logs/<session-id>/`.
 - CLI: `mise run chat -- --model gemma3` (or another model id) for a terminal-only chat loop.
 - Programmatic example:
 

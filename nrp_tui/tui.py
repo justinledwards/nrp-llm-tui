@@ -58,6 +58,7 @@ class SessionSelectScreen(Screen[Session]):
             Horizontal(
                 Button("Resume Selected", id="resume_button"),
                 Button("New Session", id="new_button", variant="primary"),
+                Button("Delete Selected", id="delete_button", variant="error"),
                 id="session_buttons",
             ),
             Static("", id="session_status"),
@@ -121,11 +122,26 @@ class SessionSelectScreen(Screen[Session]):
         session = self.store.create(label)
         self._dismiss(session)
 
+    def _delete_selected(self) -> None:
+        if not self.session_list or not self.session_list.selected:
+            self._show_status("Select a session to delete.")
+            return
+        selected = self.session_list.selected[0]
+        session_id = str(getattr(selected, "value", selected))
+        ok = self.store.delete(session_id)
+        if ok:
+            self._show_status(f"Deleted session {session_id}.")
+            self._load_sessions()
+        else:
+            self._show_status(f"Could not delete session {session_id}.")
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "resume_button":
             self._resume_selected()
         elif event.button.id == "new_button":
             self._create_new()
+        elif event.button.id == "delete_button":
+            self._delete_selected()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id == "session_input":

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -106,6 +107,19 @@ class SessionStore:
         if not meta_path.exists():
             raise FileNotFoundError(f"Session metadata not found for id '{session_id}'")
         return self._read_metadata(meta_path)
+
+    def delete(self, session_id: str) -> bool:
+        """
+        Delete a session directory by id. Returns True if removed, False if missing.
+        """
+        path = self.base_dir / session_id
+        if not path.exists():
+            return False
+        try:
+            shutil.rmtree(path)
+            return True
+        except Exception:
+            return False
 
     def _write_metadata(self, session: Session) -> None:
         data = {

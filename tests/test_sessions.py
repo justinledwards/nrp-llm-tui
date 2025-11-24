@@ -91,3 +91,18 @@ async def test_restore_previous_models_calls_add(tmp_path: Path) -> None:
     await app._restore_previous_models()
 
     assert added == ["gemma3", "gpt-oss"]
+
+
+def test_session_store_delete(tmp_path: Path) -> None:
+    store = SessionStore(base_dir=tmp_path)
+    session = store.create("demo", created_at=datetime(2024, 1, 1, 12, 0, 0))
+    # Write a dummy file to ensure directory removal is recursive.
+    (session.path / "dummy.log").write_text("hello", encoding="utf-8")
+
+    assert session.path.exists()
+    deleted = store.delete(session.id)
+    assert deleted is True
+    assert not session.path.exists()
+
+    # Deleting a non-existent session should be a no-op and return False
+    assert store.delete("non-existent") is False
